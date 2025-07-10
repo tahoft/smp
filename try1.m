@@ -1,12 +1,12 @@
 %% load
 
-im_orig = imread('im5.png');
+im_orig = imread('im1.png');
 im_gray = double(rgb2gray(im_orig))/255;
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 
 
-%CURVATURE_THRESJ = 0.005; % im1
-CURVATURE_THRESH = 0.0005; % im5
+CURVATURE_THRESJ = 0.005; % im1
+%CURVATURE_THRESH = 0.0005; % im5
 
 
 %% trim
@@ -17,7 +17,7 @@ if exist('roi_rect','var') % check if we've opened the window
         rect_rot = roi_rect.RotationAngle;
     end
 else
-    rect_pos = [Norig/4,Morig/4,Norig/2,Morig/2];
+    rect_pos = [N/4,M/4,N/2,M/2];
     rect_rot = 0;
 end
     
@@ -41,6 +41,27 @@ figure(2002); imagesc(im_trim); axis image; colormap gray; colorbar;
 title('trimmed image');
 
 % ALSO DO MOUNT REMOVAL
+if exist('mount_rect','var') % check if we've opened the window
+    if ishandle(mount_rect) % check if window still open
+        mount_pos = mount_rect.Position;
+        mount_rot = mount_rect.RotationAngle;
+    end
+else
+    mount_pos = [N/8,M/8,N/6,M/6];
+    mount_rot = 0;
+end
+figure(1002); imagesc(im_trim); axis image; colormap gray; colorbar;
+title('select mount delete ROI');%, can close figure or leave open');
+mount_rect = images.roi.Rectangle(gca,...
+    'Position', mount_pos, 'RotationAngle', mount_rot,...
+    'Rotatable', false, 'DrawingArea', 'auto', ...
+    'Label', 'mount delete');
+addlistener(mount_rect,'ROIMoved',@allevents);
+disp('Select region to delete mount and press any key');
+pause;
+im_mount = zeros(size(im_trim));
+abcd = round(mount_rect.Position);
+im_mount(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
 
 %% correct for varied gray background
 
@@ -52,6 +73,11 @@ figure(3); imagesc(im_flat); axis image; colormap gray; colorbar;
 %T = adaptthresh(1-im_trim, 'NeighborhoodSize', 9);
 %im_bw = imbinarize(1-im_trim, T);
 im_bw = imbinarize(1-im_trim, 0.8);
+
+% delete mount
+im_bw = max(im_bw - im_mount,0);
+im_bw = logical(im_bw); % bwskel needs logical not double
+
 figure(2); imagesc(im_bw); axis image; colormap gray; colorbar;
 
 %%
@@ -118,7 +144,8 @@ figure(701); imagesc(tmp_im); axis image; colormap gray; colorbar;
 
 %  compute curvature at each point
 x = crv_xy(:,1); y = crv_xy(:,2); 
-wid = 80;
+%wid = 80;
+wid = 100;
 x = smoothdata(x,"movmean",wid); y = smoothdata(y,"movmean",wid);
 %x = smoothdata(x,"gaussian",40); y = smoothdata(y,"gaussian",40);
 %dx = [x(2)-x(1); (x(3:end)-x(1:end-2))/2; x(end)-x(end-1)];
@@ -130,21 +157,28 @@ ddy = gradient(dy); % 2nd order central diff
 ddx = smoothdata(ddx,"movmean",wid); ddy = smoothdata(ddy,"movmean",wid);
 k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
 k = abs(k);
+
+ddy_nonz = ddx~=0;
+CURVATURE_THRESH = max(k)/2;
+kap_zer = k < CURVATURE_THRESH;
+
 figure(101); plot(x); title('x'); figure(102); plot(dx); title('dx'); figure(103); plot(ddx); title('ddx');
 figure(104); plot(y); title('y');figure(105); plot(dy); title('dy'); figure(106); plot(ddy); title('ddy');
-figure(107); plot(k); title('kappa');
+figure(107); plot(1:length(k),k, [1,length(k)],CURVATURE_THRESH*ones(1,2)); title("|\kappa|");
 figure(108); plot(ddx.*ddy); title('prod of concavities');
-ddy_nonz = ddx~=0;
-kap_zer = k < CURVATURE_THRESH;
+
 tmp_idx = sub2ind([M,N],crv_xy(kap_zer,2),crv_xy(kap_zer,1));
 tmp_im2 = zeros(M,N); tmp_im2(tmp_idx) = 1;
 figure(702); imagesc(tmp_im2+tmp_im); axis image; colorbar;
 
 %  pull out two longest sections with abs(kappa) > thresh
 cc = bwconncomp(kap_zer);
+% IF ONLY ONE SEGMENT, CUT IT SOMEWHERE (HALFWAY?) AND FIT TWO LINES?
+% OR ASSUME ANGLE = 0 ? 
 if cc.NumObjects~=2
     error("Fewer than two straight segments detected.");
 end
+% ALSO NEED TO HANDLE IF MORE THAN TWO SEGMENTS -- TAKE LONGEST TWO?
 seg_1_idx = cc.PixelIdxList{1}; seg_1_len = length(seg_1_idx);
 seg_2_idx = cc.PixelIdxList{2}; seg_2_len = length(seg_2_idx);
 
