@@ -2,10 +2,20 @@
 %#ok<*UNRCH>
 
 %im_orig = imread('im1.png');
-im_orig = imread('IMG_8776.jpeg');
+fn = 'IMG_8776.jpeg';
+im_orig = imread(fn);
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 
 PINK = true; 
+LINE_COLOR = 'w'; % color of line on final image: 
+                  % 'k' for black
+                  % 'r' for red
+                  % 'g' for green
+                  % 'm' for magenta
+                  % 'c' for cyan
+                  % 'b' for blue
+                  % 'w' for white
+SAVE = true;
 MOUNT_DELETE = false; % selectable region to get rid of black mount
 %CURVATURE_THRESH = 0.005; % im1
 %CURVATURE_THRESH = 0.0005; % im5
@@ -262,11 +272,25 @@ theta = atan(abs((beta_1(2)-beta_2(2))/(1+beta_1(2)*beta_2(2))))*180/pi;
 % draw on photo
 figure(6); imagesc(im_orig_trim); axis image; axis off;
 hold on; plot(x_1,y_1, LineWidth=2); plot(x_2,y_2, LineWidth=2);
-hold off; axis([0,N,0,M]); title("angle = " + theta + " (degrees)")
+hold off; axis([0,N,0,M]); title("angle = " + theta + " degrees")
 
+%% save image 
+if SAVE
+    im_save = im_orig_trim;
+    im_save = insertShape(im_save, 'Line', ...
+                          [[x_1(1),y_1(1)], [x_1(end),y_1(end)]], ...
+                          'Color', LINE_COLOR, 'LineWidth', 8);
+    im_save = insertShape(im_save, 'Line', ...
+                          [[x_2(1),y_2(1)], [x_2(end),y_2(end)]], ...
+                          'Color', LINE_COLOR, 'LineWidth', 8);
 
+    figure(2009); imshow(im_save);
 
-% TODO: *** git ***
+    [fn_pth,fn_name,~] = fileparts(fn);
+    imwrite(im_save, fn_name + "_angle_" + ...
+        floor(theta) + "_" + round((theta-floor(theta))*100) + ".png");
+    % may want to add path (may change with gui to select images)
+end
 
 
 %%
