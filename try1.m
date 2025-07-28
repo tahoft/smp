@@ -1,23 +1,31 @@
 %% load
+%#ok<*UNRCH>
 
-im_orig = imread('im1.png');
-im_gray = double(rgb2gray(im_orig))/255;
+%im_orig = imread('im1.png');
+im_orig = imread('IMG_8776.jpeg');
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 
-
-CURVATURE_THRESJ = 0.005; % im1
+PINK = true; 
+MOUNT_DELETE = false; % selectable region to get rid of black mount
+%CURVATURE_THRESH = 0.005; % im1
 %CURVATURE_THRESH = 0.0005; % im5
 
+%% grayscale
+if PINK
+    im_gray = im_orig(:,:,1); % red channel has largest contrast
+else
+    im_gray = double(rgb2gray(im_orig))/255;
+end
 
 %% trim
-[Morig, Norig] = size(im_orig);
+[Morig, Norig, ~] = size(im_orig);
 if exist('roi_rect','var') % check if we've opened the window
     if ishandle(roi_rect) % check if window still open
         rect_pos = roi_rect.Position;
         rect_rot = roi_rect.RotationAngle;
     end
 else
-    rect_pos = [N/4,M/4,N/2,M/2];
+    rect_pos = [Norig/4,Morig/4,Norig/2,Morig/2];
     rect_rot = 0;
 end
     
@@ -40,52 +48,90 @@ im_orig_trim = im_orig(trim_info(2):trim_info(2)+trim_info(4), ...
 figure(2002); imagesc(im_trim); axis image; colormap gray; colorbar;
 title('trimmed image');
 
-% ALSO DO MOUNT REMOVAL
-if exist('mount_rect','var') % check if we've opened the window
-    if ishandle(mount_rect) % check if window still open
-        mount_pos = mount_rect.Position;
-        mount_rot = mount_rect.RotationAngle;
+if MOUNT_DELETE
+    % ALSO DO MOUNT REMOVAL
+    if exist('mount_rect','var') % check if we've opened the window
+        if ishandle(mount_rect) % check if window still open
+            mount_pos = mount_rect.Position;
+            mount_rot = mount_rect.RotationAngle;
+        end
+    else
+        mount_pos = [N/8,M/8,N/6,M/6];
+        mount_rot = 0;
     end
-else
-    mount_pos = [N/8,M/8,N/6,M/6];
-    mount_rot = 0;
+    figure(1002); imagesc(im_trim); axis image; colormap gray; colorbar;
+    title('select mount delete ROI');%, can close figure or leave open');
+    mount_rect = images.roi.Rectangle(gca,...
+        'Position', mount_pos, 'RotationAngle', mount_rot,...
+        'Rotatable', false, 'DrawingArea', 'auto', ...
+        'Label', 'mount delete');
+    addlistener(mount_rect,'ROIMoved',@allevents);
+    disp('Select region to delete mount and press any key');
+    pause;
+    im_mount = zeros(size(im_trim));
+    abcd = round(mount_rect.Position);
+    im_mount(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
 end
-figure(1002); imagesc(im_trim); axis image; colormap gray; colorbar;
-title('select mount delete ROI');%, can close figure or leave open');
-mount_rect = images.roi.Rectangle(gca,...
-    'Position', mount_pos, 'RotationAngle', mount_rot,...
-    'Rotatable', false, 'DrawingArea', 'auto', ...
-    'Label', 'mount delete');
-addlistener(mount_rect,'ROIMoved',@allevents);
-disp('Select region to delete mount and press any key');
-pause;
-im_mount = zeros(size(im_trim));
-abcd = round(mount_rect.Position);
-im_mount(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
 
 %% correct for varied gray background
 
 im_flat = imflatfield(im_trim,30);
 figure(3); imagesc(im_flat); axis image; colormap gray; colorbar;
 
+% smooth to get rid of texture on lab bench
+im_smooth = imgaussfilt(im_flat,10);
+figure(4); imagesc(im_smooth); axis image; colormap gray; colorbar;
+
+% texture background removal
+%im_notex = entropyfilt(im_flat, true(3)); % remove texture
+%im_notex = imflatfield(im_notex, 50);
+%im_notex = imgaussfilt(im_notex, 20); % smooth
+im_notex = stdfilt(im_flat, true(11)); % remove texture
+im_notex = (im_notex-min(im_notex(:)))/(max(im_notex(:))-min(im_notex(:))); % make sure it's [0,1]
+figure(5); imagesc(1-im_notex); axis image; colormap gray; colorbar;
+
+
 %% --> bw
 
 %T = adaptthresh(1-im_trim, 'NeighborhoodSize', 9);
 %im_bw = imbinarize(1-im_trim, T);
-im_bw = imbinarize(1-im_trim, 0.8);
+im_bw = imbinarize(im_trim, 0.8);
+%T = adaptthresh(1-im_smooth, 0.6, 'NeighborhoodSize', 9);
+%im_bw = imbinarize(1-im_smooth, T);
+%im_bw = imbinarize(im_smooth, 0.63);
+%im_bw = imbinarize(1-im_notex, 0.85);
 
 % delete mount
-im_bw = max(im_bw - im_mount,0);
+if MOUNT_DELETE, im_bw = max(im_bw - im_mount,0); end 
 im_bw = logical(im_bw); % bwskel needs logical not double
+
+se = strel("disk",9);
+im_bw = imerode(im_bw,se);
+se = strel("disk",25);
+im_bw = imdilate(im_bw,se);
+im_bw = imerode(im_bw,se);
+im_bw = imdilate(im_bw,se);
+im_bw = imerode(im_bw,se);
+im_bw = imfill(im_bw,"holes");
 
 figure(2); imagesc(im_bw); axis image; colormap gray; colorbar;
 
-%%
 % get skeleton (bwskel)
 im_skel = bwskel(im_bw);
+figure(21); imagesc(im_bw+im_skel); axis image; colorbar;
+
+
+%%
 % get list of (x,y) co-ordinates of each pixel in in (regionprops PixelList)
 s = regionprops(im_skel, 'PixelList'); % same as ind2sub([M,N],find(im_skel))
 %s = regionprops(im_skel, 'PixelIdxList'); % same as find(im_skel(:))
+
+% NEEd TO CHECK IF ONLY ONE REGION
+if length(s)~=1
+    warning("More than one region detected: continue at your own risk...")
+end
+s = s(1); 
+
 % turn in to a paramaterized curve
 im_skel_tmp = im_skel;
 x = s.PixelList(:,1); y = s.PixelList(:,2);
@@ -140,23 +186,28 @@ tmp_im = zeros(M,N); tmp_im(sub2ind([M,N],crv_xy(:,2),crv_xy(:,1))) = 1;
 figure(701); imagesc(tmp_im); axis image; colormap gray; colorbar;
 
 
-% separate into flat & curved: 
+%% separate into flat & curved: 
 
 %  compute curvature at each point
 x = crv_xy(:,1); y = crv_xy(:,2); 
 %wid = 80;
-wid = 100;
-x = smoothdata(x,"movmean",wid); y = smoothdata(y,"movmean",wid);
+%wid = 100;
+wid = length(x)/8;
+%x = smoothdata(x,"movmean",wid); y = smoothdata(y,"movmean",wid);
 %x = smoothdata(x,"gaussian",40); y = smoothdata(y,"gaussian",40);
 %dx = [x(2)-x(1); (x(3:end)-x(1:end-2))/2; x(end)-x(end-1)];
 dx = gradient(x); % central diff in middle, forward diff at ends
+dx = smoothdata(dx,"movmean",wid); 
 dy = gradient(y);
-dx = smoothdata(dx,"movmean",wid); dy = smoothdata(dy,"movmean",wid);
+dy = smoothdata(dy,"movmean",wid);
 ddx = gradient(dx); % 2nd order central diff
+ddx = smoothdata(ddx,"movmean",wid); 
 ddy = gradient(dy); % 2nd order central diff
-ddx = smoothdata(ddx,"movmean",wid); ddy = smoothdata(ddy,"movmean",wid);
+ddy = smoothdata(ddy,"movmean",wid);
 k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
 k = abs(k);
+%k = smoothdata(k,"movmedian",11);
+k = smoothdata(k,"movmean",wid);
 
 ddy_nonz = ddx~=0;
 CURVATURE_THRESH = max(k)/2;
@@ -165,18 +216,21 @@ kap_zer = k < CURVATURE_THRESH;
 figure(101); plot(x); title('x'); figure(102); plot(dx); title('dx'); figure(103); plot(ddx); title('ddx');
 figure(104); plot(y); title('y');figure(105); plot(dy); title('dy'); figure(106); plot(ddy); title('ddy');
 figure(107); plot(1:length(k),k, [1,length(k)],CURVATURE_THRESH*ones(1,2)); title("|\kappa|");
-figure(108); plot(ddx.*ddy); title('prod of concavities');
+%figure(108); plot(ddx.*ddy); title('prod of concavities');
 
 tmp_idx = sub2ind([M,N],crv_xy(kap_zer,2),crv_xy(kap_zer,1));
 tmp_im2 = zeros(M,N); tmp_im2(tmp_idx) = 1;
 figure(702); imagesc(tmp_im2+tmp_im); axis image; colorbar;
+
+drawnow; 
 
 %  pull out two longest sections with abs(kappa) > thresh
 cc = bwconncomp(kap_zer);
 % IF ONLY ONE SEGMENT, CUT IT SOMEWHERE (HALFWAY?) AND FIT TWO LINES?
 % OR ASSUME ANGLE = 0 ? 
 if cc.NumObjects~=2
-    error("Fewer than two straight segments detected.");
+    %error("Fewer than two straight segments detected.");
+    error("Number of straight segments detected is different than TWO.");
 end
 % ALSO NEED TO HANDLE IF MORE THAN TWO SEGMENTS -- TAKE LONGEST TWO?
 seg_1_idx = cc.PixelIdxList{1}; seg_1_len = length(seg_1_idx);
@@ -213,3 +267,8 @@ hold off; axis([0,N,0,M]); title("angle = " + theta + " (degrees)")
 
 
 % TODO: *** git ***
+
+
+%%
+function allevents(~, ~, ~) % dummy  to catch the trim rectangle move event
+end
