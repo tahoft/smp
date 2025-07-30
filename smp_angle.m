@@ -4,23 +4,8 @@
 %
 % by Thomas Höft 
 
-%% load
-%#ok<*UNRCH>
-
-%fn = 'IMG_8776.jpeg';
-
-[fn,pth] = uigetfile('*.*','MultiSelect','on');
-
-[fn_pth,fn_name,~] = fileparts(fn);
-imfn = [pth filesep fn];
-
-im_orig = imread(imfn);
-%im_orig = imread(fn);
-im_orig = rot90(im_orig,-1);
-figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
-
-PINK = false; 
-SAVE = false;
+PINK = true; 
+SAVE = true;
 PLOTS = true;
 MOUNT_DELETE = false; % selectable region to get rid of black mount
 LINE_COLOR = 'w'; % color of line on final image: 
@@ -31,7 +16,44 @@ LINE_COLOR = 'w'; % color of line on final image:
                   % 'c' for cyan
                   % 'b' for blue
                   % 'w' for white
-%CURVATURE_THRESH = 0.005; % unused...
+
+
+%% get filenames
+%#ok<*UNRCH>
+
+%fn = 'IMG_8776.jpeg';
+%[fn_pth,fn_name,~] = fileparts(fn);
+%imfn = [pth filesep fn];
+%im_orig = imread(fn);
+
+
+if exist('pth', 'var') && any(pth~=0)
+    [fn,pth] = uigetfile([pth '*.*'],'MultiSelect','on');
+else
+    [fn,pth] = uigetfile('*.*','MultiSelect','on');
+end
+
+if ~iscell(fn) % only one file, fn is string, convert to cell array
+    fn = {fn};
+    nfn = 1;
+else
+    nfn = length(fn);
+end
+
+if SAVE, angles_save = zeros(nfn,1); end % angle storage to write to csv
+
+% start loop over all files
+for fn_ii=1:nfn
+
+%% load
+disp("Processing " + fn_ii + " of " + nfn + ": " + fn{fn_ii});
+imfn = [pth filesep fn{fn_ii}];
+
+im_orig = imread(imfn);
+
+im_orig = rot90(im_orig,-1);
+figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
+title(fn{fn_ii},'Interpreter','none')
 
 
 %% color -> grayscale
@@ -235,17 +257,23 @@ k = smooth(k,wid);
 % expect a W shape, so find two minima
 % the max inbetween helps find the thresholds we want
 crv_mid = round(crv_len/2);
-[min1,id1] = min(k(10:crv_mid));
-id1 = id1 + 10; % shift 
-[min2,id2] = min(k(crv_mid+1:end-10));
-id2 = id2 + crv_mid + 1; % shift 
+[min1,id1] = min(k(10:crv_mid-1)); % ignore first 9 pixels
+id1 = id1 + 10 - 1; % shift 
+[min2,id2] = min(k(crv_mid+1:end-10+1)); % ignore last 9 pixels
+id2 = id2 + crv_mid + 1 - 1; % shift 
 [maxmid,idmaxmid] = max(k(id1:id2));
-idmaxmid = idmaxmid + id1 + 1; % shift 
+idmaxmid = idmaxmid + id1 - 1; % shift 
 kap_thresh1 = (maxmid-min1)/4 + min1;
 kap_thresh2 = (maxmid-min2)/4 + min2;
 kap_zer = false(size(k));
 kap_zer(1:idmaxmid) = k(1:idmaxmid)<kap_thresh1;
 kap_zer(idmaxmid:end) = k(idmaxmid:end)<kap_thresh2;
+if idmaxmid==id1 % curvature is monotone decreasing L->Mid -- straight?
+    kap_zer(1:crv_len/8) = true; % keep left 1/8th?
+end
+if idmaxmid==id2 % curvature is monotone decreasing Mid->R -- straight?
+    kap_zer(end-crv_len/8:end) = true; % keep right 1/8th? 
+end
 
 
 if PLOTS
@@ -329,7 +357,8 @@ end
 %%
 % compute angle
 theta = atan(abs((beta_1(2)-beta_2(2))/(1+beta_1(2)*beta_2(2))))*180/pi;
-disp("File " + fn_name + " angle: " + theta + " degrees");
+disp(fn{fn_ii} + " --> " + theta + " degrees");
+if SAVE, angles_save(fn_ii) = theta; end
 
 % draw on photo
 figure(3); imagesc(im_orig_trim); axis image; axis off;
@@ -338,8 +367,9 @@ plot(x_1_data, y_1_data, 'b', LineWidth=4);
 plot(x_2_data, y_2_data, 'r', LineWidth=4);
 hold off; axis([0,N,0,M]); title("angle = " + theta + " degrees")
 
-%% save image 
+%% save image
 if SAVE
+    % start with trimmed image and draw lines on it (no other annotation)
     im_save = im_orig_trim;
     im_save = insertShape(im_save, 'Line', ...
                           [[x_1(1),y_1(1)], [x_1(end),y_1(end)]], ...
@@ -350,10 +380,29 @@ if SAVE
 
     figure(4); imshow(im_save);
 
-    imwrite(im_save, fn_name + "_angle_" + ...
+    [~,fn_tmp,~] = fileparts(fn{fn_ii}); % get filename, strip extension
+    % filename with explicit path, angle rounded to two decimals with
+    % underscore instead of decimal place
+    imwrite(im_save, [pth, filesep, fn_tmp] + "_angle_" + ...
         floor(theta) + "_" + round((theta-floor(theta))*100) + ".png");
-    % may want to add path (may change with gui to select images)
 end
+
+%% end loop over all files
+end
+
+%% save angles to csv and xlsx
+if SAVE
+    ang_fn = pth + "angles.csv";
+    writecell({pth}, ang_fn)
+    T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
+    writetable(T, ang_fn, 'WriteMode','Append');
+
+    ang_fn = pth + "angles.xlsx";
+    T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
+    writetable(T, ang_fn);
+    writecell({pth}, ang_fn, 'WriteMode','Append')
+end
+
 
 %% HELPER FUNCTIONS BELOW THIS LINE
 
