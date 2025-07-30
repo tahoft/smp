@@ -7,14 +7,19 @@
 %% load
 %#ok<*UNRCH>
 
-fn = 'IMG_8776.jpeg';
-[fn_pth,fn_name,~] = fileparts(fn);
+%fn = 'IMG_8776.jpeg';
 
-im_orig = imread(fn);
+[fn,pth] = uigetfile('*.*','MultiSelect','on');
+
+[fn_pth,fn_name,~] = fileparts(fn);
+imfn = [pth filesep fn];
+
+im_orig = imread(imfn);
+%im_orig = imread(fn);
 im_orig = rot90(im_orig,-1);
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 
-PINK = true; 
+PINK = false; 
 SAVE = false;
 PLOTS = true;
 MOUNT_DELETE = false; % selectable region to get rid of black mount
@@ -94,8 +99,14 @@ if MOUNT_DELETE
 end
 
 %% --> bw
-
-im_bw = imbinarize(im_trim, 0.8);
+if PINK % white on dark
+    im_bw = imbinarize(im_trim, 0.8);
+    % don't do hole fill-in b/c so much background need to erode first
+else % black on white
+    im_bw = imbinarize(1-im_trim, 0.8);
+    % fill in any holes left from specular reflections
+    im_bw = imfill(im_bw,"holes");
+end
 
 % delete mount
 if MOUNT_DELETE, im_bw = max(im_bw - im_mount,0); end 
@@ -112,19 +123,17 @@ ker_d = 51;
 %ker = ones(ker_d)/ker_d^2; % mean
 ker = exp(-(-(ker_d-1)/2:(ker_d-1)/2).^2); ker = ker/sum(ker); % gaussian
 im_bw = imbinarize(conv2(im_bw,ker,'same')); % blur to smooth
-se1 = strel("disk",round(ker_d/4));
 
 % helps get rid of residual boundary weirdness from background and specular
 % reflections: 
+se1 = strel("disk",round(ker_d/4));
 im_bw = imclose(im_bw, se1); % dilation followed by erosion
-
-if PLOTS
-    figure(100); imagesc(im_bw); axis image; colormap gray; colorbar;
-end
 
 % get skeleton (bwskel)
 im_skel = bwskel(logical(im_bw));% bwskel needs logical not double
+
 if PLOTS
+    figure(100); imagesc(im_bw); axis image; colormap gray; colorbar;
     figure(101); imagesc(im_bw+im_skel); axis image; colorbar;
 end
 
