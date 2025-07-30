@@ -1,7 +1,7 @@
 %% load
 %#ok<*UNRCH>
 
-fn = 'IMG_8776.jpeg';
+fn = 'IMG_8778.jpeg';
 im_orig = imread(fn);
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 
@@ -84,46 +84,30 @@ if MOUNT_DELETE
     im_mount(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
 end
 
-%% correct for varied gray background
-
-im_flat = imflatfield(im_trim,30);
-figure(3); imagesc(im_flat); axis image; colormap gray; colorbar;
-
-% smooth to get rid of texture on lab bench
-im_smooth = imgaussfilt(im_flat,10);
-figure(4); imagesc(im_smooth); axis image; colormap gray; colorbar;
-
-% texture background removal
-%im_notex = entropyfilt(im_flat, true(3)); % remove texture
-%im_notex = imflatfield(im_notex, 50);
-%im_notex = imgaussfilt(im_notex, 20); % smooth
-im_notex = stdfilt(im_flat, true(11)); % remove texture
-im_notex = (im_notex-min(im_notex(:)))/(max(im_notex(:))-min(im_notex(:))); % make sure it's [0,1]
-figure(5); imagesc(1-im_notex); axis image; colormap gray; colorbar;
-
-
 %% --> bw
 
-%T = adaptthresh(1-im_trim, 'NeighborhoodSize', 9);
-%im_bw = imbinarize(1-im_trim, T);
 im_bw = imbinarize(im_trim, 0.8);
-%T = adaptthresh(1-im_smooth, 0.6, 'NeighborhoodSize', 9);
-%im_bw = imbinarize(1-im_smooth, T);
-%im_bw = imbinarize(im_smooth, 0.63);
-%im_bw = imbinarize(1-im_notex, 0.85);
 
 % delete mount
 if MOUNT_DELETE, im_bw = max(im_bw - im_mount,0); end 
 
-
+% get rid of stray little bits
 se = strel("disk",9);
 im_bw = imerode(im_bw,se);
-se = strel("disk",25);
-im_bw = imdilate(im_bw,se);
-im_bw = imerode(im_bw,se);
-im_bw = imdilate(im_bw,se);
-im_bw = imerode(im_bw,se);
+
+% fill in any holes left from specular reflections
 im_bw = imfill(im_bw,"holes");
+
+% smooth out boundary 
+ker_d = 51; 
+%ker = ones(ker_d)/ker_d^2; % mean
+ker = exp(-(-(ker_d-1)/2:(ker_d-1)/2).^2); ker = ker/sum(ker); % gaussian
+im_bw = imbinarize(conv2(im_bw,ker,'same')); % blur to smooth
+se1 = strel("disk",round(ker_d/4));
+
+% helps get rid of residual boundary weirdness from background and specular
+% reflections: 
+im_bw = imclose(im_bw, se1); % dilation followed by erosion
 
 figure(2); imagesc(im_bw); axis image; colormap gray; colorbar;
 
@@ -207,33 +191,34 @@ figure(701); imagesc(tmp_im); axis image; colormap gray; colorbar;
 %  compute curvature at each point
 x = crv_xy(:,1); y = crv_xy(:,2); 
 crv_len = length(x);
-%wid = 80;
-%wid = 100;
-wid = crv_len/8;
-%x = smoothdata(x,"movmean",wid); y = smoothdata(y,"movmean",wid);
-%x = smooth(x, 21);
-dx = gradient(x); % central diff in middle, forward diff at ends
-dx = smoothdata(dx,"movmean",wid); 
-%dx = smooth(dx,wid); 
-dy = gradient(y);
-dy = smoothdata(dy,"movmean",wid);
-ddx = gradient(dx); % 2nd order central diff
-ddx = smoothdata(ddx,"movmean",wid); 
-%ddx = smooth(ddx,wid);
-ddy = gradient(dy); % 2nd order central diff
-ddy = smoothdata(ddy,"movmean",wid);
+% %wid = 80;
+% %wid = 100;
+% wid = crv_len/8;
+% %x = smoothdata(x,"movmean",wid); y = smoothdata(y,"movmean",wid);
+% %x = smooth(x, 21);
+% dx = gradient(x); % central diff in middle, forward diff at ends
+% dx = smoothdata(dx,"movmean",wid); 
+% %dx = smooth(dx,wid); 
+% dy = gradient(y);
+% dy = smoothdata(dy,"movmean",wid);
+% ddx = gradient(dx); % 2nd order central diff
+% ddx = smoothdata(ddx,"movmean",wid); 
+% %ddx = smooth(ddx,wid);
+% ddy = gradient(dy); % 2nd order central diff
+% ddy = smoothdata(ddy,"movmean",wid);
 
-wid = round(crv_len/16);
-x = smooth(x,wid);
+wid = round(crv_len/8);
+%wid = 51;
+x = smooth(x,wid,'loess');
 dx = gradient(x);
-dx = smooth(dx,2*wid);
+dx = smooth(dx,wid,'loess');
 ddx = gradient(dx);
-ddx = smooth(ddx,wid);
-y = smooth(y,wid);
+ddx = smooth(ddx,wid,'loess');
+y = smooth(y,wid,'loess');
 dy = gradient(y);
-dy = smooth(dy,wid);
+dy = smooth(dy,wid,'loess');
 ddy = gradient(dy);
-ddy = smooth(ddy,wid);
+ddy = smooth(ddy,wid,'loess');
 
 
 k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
@@ -250,12 +235,12 @@ k = smooth(k,wid);
 
 
 
-ddy_nonz = ddx~=0;
+%ddy_nonz = ddx~=0;
 %CURVATURE_THRESH = max(k)/2;
 %CURVATURE_THRESH = max(k(wid+1:end-wid-1))/4;
-CURVATURE_THRESH = (max(k(wid+1:end-wid-1))-min(k(wid+1:end-wid-1)))/4 + min(k(wid+1:end-wid-1));
+%CURVATURE_THRESH = (max(k(wid+1:end-wid-1))-min(k(wid+1:end-wid-1)))/4 + min(k(wid+1:end-wid-1));
 %kap_zer(wid+1:end-wid) = k < CURVATURE_THRESH;
-kap_zer = k < CURVATURE_THRESH;
+%kap_zer = k < CURVATURE_THRESH;
 
 % expect a W shape, so find two minima
 % the max inbetween helps find the thresholds we want
@@ -266,8 +251,8 @@ id1 = id1 + 10; % shift
 id2 = id2 + crv_mid + 1; % shift 
 [maxmid,idmaxmid] = max(k(id1:id2));
 idmaxmid = idmaxmid + id1 + 1; % shift 
-kap_thresh1 = (maxmid-min1)/2 + min1;
-kap_thresh2 = (maxmid-min2)/2 + min2;
+kap_thresh1 = (maxmid-min1)/4 + min1;
+kap_thresh2 = (maxmid-min2)/4 + min2;
 kap_zer = false(size(k));
 kap_zer(1:idmaxmid) = k(1:idmaxmid)<kap_thresh1;
 kap_zer(idmaxmid:end) = k(idmaxmid:end)<kap_thresh2;
@@ -292,23 +277,37 @@ figure(702); imagesc(tmp_im2+tmp_im); axis image; colorbar;
 
 drawnow; 
 
+% TODO: pull out sections that include the minima
+
 %  pull out two longest sections with abs(kappa) > thresh
 cc = bwconncomp(kap_zer);
 % IF ONLY ONE SEGMENT, CUT IT SOMEWHERE (HALFWAY?) AND FIT TWO LINES?
 % OR ASSUME ANGLE = 0 ? 
 if cc.NumObjects~=2
     %error("Fewer than two straight segments detected.");
-    warning("Number of straight segments detected is " + cc.NumObjects + "; should be TWO.");
+    %warning("Number of straight segments detected is " + cc.NumObjects + "; should be TWO.");
     if cc.NumObjects>2
-        seg_len = cellfun('length',cc.PixelIdxList);
-        [~,idx] = sort(seg_len,"descend");
-        cc.PixelIdxList = cc.PixelIdxList(idx);
-    end
-end
-% ALSO NEED TO HANDLE IF MORE THAN TWO SEGMENTS -- TAKE LONGEST TWO?
-seg_1_idx = cc.PixelIdxList{1}; seg_1_len = length(seg_1_idx);
-seg_2_idx = cc.PixelIdxList{2}; seg_2_len = length(seg_2_idx);
+        %seg_len = cellfun('length',cc.PixelIdxList);
+        %[~,idx] = sort(seg_len,"descend");
+        %cc.PixelIdxList = cc.PixelIdxList(idx);
 
+        for ii=1:cc.NumObjects
+            if any(cc.PixelIdxList{ii}==id1) % this one has segment 1
+                seg_1_idx = cc.PixelIdxList{ii}; 
+            end
+            if any(cc.PixelIdxList{ii}==id2) % this one has segment 1
+                seg_2_idx = cc.PixelIdxList{ii}; 
+            end
+        end
+    else
+        warning("Only one straight line segment detected");
+    end
+else
+    seg_1_idx = cc.PixelIdxList{1}; 
+    seg_2_idx = cc.PixelIdxList{2}; 
+end
+seg_1_len = length(seg_1_idx); 
+seg_2_len = length(seg_2_idx);
 
 % fit line to flat sections
 %  segment 1
@@ -367,10 +366,24 @@ if SAVE
     % may want to add path (may change with gui to select images)
 end
 
+%% HELPER FUNCTIONS BELOW THIS LINE
 
 %%
-function ret = smooth_th(arg,wid)
-    ret = conv([fliplr(arg(1:(wid-1)/2)); arg; fliplr(arg(end-(wid-1)/2+1:end))], ones(wid,1)/wid, 'valid');
+function ret = smooth_th(arg, wid, fil)
+    % use an odd number for wid
+    arguments
+        arg
+        wid
+        fil = 'mean';
+    end
+    arg = arg(:); % make sure it's a column
+    switch fil
+        case 'mean'
+            ker = ones(wid,1)/wid;
+        case 'gauss'
+            ker = exp(-(-(wid-1)/2:(wid-1)/2).^2); ker = ker/sum(ker); 
+    end
+    ret = conv([fliplr(arg(1:(wid-1)/2)); arg; fliplr(arg(end-(wid-1)/2+1:end))], ker, 'valid');
 end
 
 
