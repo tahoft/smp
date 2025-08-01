@@ -1,14 +1,20 @@
 %% smp_angle
 % Extract angle of 'U'-shaped shape memory polymers
-% For Brittany Nelson-Cheeseman, Elsie Kmecak, Abeer Najajra
 %
-% by Thomas Höft 
+% Thomas Höft, University of St. Thomas
+% hoft@stthomas.edu
 
-PINK = false; 
-SAVE = true;
-ENDS = true;
-PLOTS = false;
+% If the region selection box disappears, type 
+% >> clear
+% at the command line to reset it (and weverything else too).
+
+PINK = true; % true for pink-on-black, false for black-on-white
+SAVE = true; % save trimmed image with overlaid lines and spreadsheet
+ENDS = true; % use ends of filament as the straight lines we're finding 
+             % the angle between -- set to false to automatically find the
+             % segments with lowest curvature (i.e. straightest) 
 EXTRA_DELETE = true; % selectable region to get rid of filament tail or mount
+ROT_90 = false; % if you get a failed fit to a vertical line, rotate 90 degrees
 LINE_COLOR = 'w'; % color of line on final image: 
                   % 'k' for black
                   % 'r' for red
@@ -17,6 +23,7 @@ LINE_COLOR = 'w'; % color of line on final image:
                   % 'c' for cyan
                   % 'b' for blue
                   % 'w' for white
+PLOTS = false; % show diagnostic plots
 
 %#ok<*UNRCH> % don't warn on unreachable code
 
@@ -46,7 +53,8 @@ imfn = [pth filesep fn{fn_ii}];
 
 im_orig = imread(imfn);
 
-%im_orig = rot90(im_orig,-1);
+if ROT_90, im_orig = rot90(im_orig,-1); end % rotates by 90 degrees, duh
+
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 title(fn{fn_ii},'Interpreter','none')
 
@@ -80,13 +88,14 @@ addlistener(roi_rect,'ROIMoved',@allevents);
 %disp('Select region of interest and press any key');
 pause;
 
-trim_info = round(roi_rect.Position);
-% using roi_rect.Vertices might be easier
-im_trim = im_gray(trim_info(2):trim_info(2)+trim_info(4), ...
-    trim_info(1):trim_info(1)+trim_info(3));
-im_orig_trim = im_orig(trim_info(2):trim_info(2)+trim_info(4), ...
-    trim_info(1):trim_info(1)+trim_info(3),:);
+t_v = round(roi_rect.Vertices); % trim vertices 4x2 
+                                % [x1,y1; x2,y2; x3,y3; x4,y4] 
+                                % CCW around rect starting in U-L?
+im_trim = im_gray(t_v(1,2):t_v(3,2), t_v(1,1):t_v(3,1)); 
+im_orig_trim = im_orig(t_v(1,2):t_v(3,2), t_v(1,1):t_v(3,1),:); 
+
 [M,N]=size(im_trim);
+
 figure(2); imagesc(im_trim); axis image; colormap gray; colorbar;
 title('trimmed grayscale image');
 
@@ -94,11 +103,19 @@ if EXTRA_DELETE
     % also have user select region to delete
     if exist('mount_rect','var') % check if we've opened the window
         if ishandle(mount_rect) % check if window still open
-            mount_pos = mount_rect.Position;
-            mount_rot = mount_rect.RotationAngle;
+            % check if any rectangle corner is outside of view
+            % (can happen if user selects new trim box)
+            m_v = round(mount_rect.Vertices);
+            if any(m_v<0,'all') || any(m_v>[N,M],'all') % reset position
+                mount_pos = [N/8,M/8,N/6,M/6]; % [x_0, y_0, x_width, y_width]
+                mount_rot = 0; 
+            else % old position is still ok
+                mount_pos = mount_rect.Position;
+                mount_rot = mount_rect.RotationAngle;
+            end
         end
     else
-        mount_pos = [N/8,M/8,N/6,M/6];
+        mount_pos = [N/8,M/8,N/6,M/6]; % [x_0, y_0, x_width, y_width]
         mount_rot = 0;
     end
     figure(1002); imagesc(im_trim); axis image; colormap gray; colorbar;
@@ -109,9 +126,12 @@ if EXTRA_DELETE
     addlistener(mount_rect,'ROIMoved',@allevents);
     %disp('Select region to delete and press any key');
     pause;
+
+    m_v = round(mount_rect.Vertices); % mount vertices 4x2 
+                                      % [x1,y1; x2,y2; x3,y3; x4,y4] 
+                                      % CCW around rect starting in U-L?
     im_del = zeros(size(im_trim));
-    abcd = round(mount_rect.Position);
-    im_del(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
+    im_del(m_v(1,2):m_v(3,2), m_v(1,1):m_v(3,1)) = 1; 
 end
 
 %% --> bw
@@ -167,7 +187,7 @@ if length(s)~=1
     s = s(idx(1)); % keep longest, discard rest
 end
 
-% turn in to a paramaterized curve
+% turn in to a paramaterized curve    (is there an easier way?)
 im_skel_tmp = im_skel;
 x = s.PixelList(:,1); y = s.PixelList(:,2);
 npix = size(s.PixelList,1); % number of pixels in the curve
@@ -227,18 +247,13 @@ crv_len = length(x);
 
 if PLOTS | ~ENDS % either for use in computation or for diagnostic display
     %  compute curvature at each point
-    wid = round(crv_len/4);
-    %wid = 51;
+    wid = round(crv_len/4); % smoothing window width
     x = smooth(x,wid,'loess');
-    dx = gradient(x);
-    dx = smooth(dx,wid,'loess');
-    ddx = gradient(dx);
-    ddx = smooth(ddx,wid,'loess');
+    dx = gradient(x); dx = smooth(dx,wid,'loess');
+    ddx = gradient(dx); ddx = smooth(ddx,wid,'loess');
     y = smooth(y,wid,'loess');
-    dy = gradient(y);
-    dy = smooth(dy,wid,'loess');
-    ddy = gradient(dy);
-    ddy = smooth(ddy,wid,'loess');
+    dy = gradient(y); dy = smooth(dy,wid,'loess');
+    ddy = gradient(dy); ddy = smooth(ddy,wid,'loess');
 
     k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
     k = abs(k);
@@ -269,7 +284,7 @@ if ~ENDS % find flat regions via curvature
 end
 
 if ENDS % just keep L & R 1/8th
-    kap_zer = false(size(k));
+    kap_zer = false(crv_len,1);
     % length/6 seems to give enough points for a good fit to the line
     % leave off first & last length/6 to avoid weirness at ends of curve
     seg_1_idx = round(crv_len/32):round(crv_len/6);
@@ -287,7 +302,7 @@ if PLOTS
     figure(126); plot(ddy); title('ddy');
     if ENDS
         figure(127); plot(1:crv_len,k)
-    title("|\kappa|");
+        title("|\kappa|");
     else
         figure(127); plot(1:crv_len,k, ...
                          [1,idmaxmid],kap_thresh1*ones(1,2), ...
@@ -302,7 +317,7 @@ if PLOTS
     figure(130); imagesc(tmp_im2+tmp_im); axis image; colorbar;
 end
 
-% TODO: I THINK THE PART WITH >2 IS IRRELEVANT...?
+% TODO: I THINK ALL OF THIS IS IRRELEVANT...?
 if ~ENDS
     %  pull out the two sections from above with small curvature
     cc = bwconncomp(kap_zer);
@@ -333,33 +348,55 @@ if ~ENDS
         seg_2_idx = cc.PixelIdxList{2};
     end
 end
+
 seg_1_len = length(seg_1_idx); 
 seg_2_len = length(seg_2_idx);
 
 % fit line to flat sections
 %  segment 1
-X = ones(seg_1_len,2);
-X(:,2) = crv_xy(seg_1_idx,1); % data matrix -- predictor
-Y = crv_xy(seg_1_idx,2); % response
-beta_1 = (X'*X)\X'*Y; % linear least squares
-x_1 = 1:N; y_1 = beta_1(1) + beta_1(2)*x_1; % regression line
-x_1_data = X(:,2); 
-y_1_data = Y; 
+X1 = ones(seg_1_len,2);
+X1(:,2) = crv_xy(seg_1_idx,1); % data matrix -- predictor
+Y1 = crv_xy(seg_1_idx,2); % response
+beta_1 = (X1'*X1)\X1'*Y1; % linear least squares
+%  segment 2
+X2 = ones(seg_2_len,2);
+X2(:,2) = crv_xy(seg_2_idx,1); % data matrix -- predictor
+Y2 = crv_xy(seg_2_idx,2); % response
+beta_2 = (X2'*X2)\X2'*Y2; % linear least squares
+
+% check to see if fit to vertical line and it failed
+r1s = sign(Y1-X1*beta_1); % sign of residual
+r2s = sign(Y2-X2*beta_2);
+if all(r1s(1:round(length(r1s)/8)) == -r1s(end-round(length(r1s)/8)+1:end))
+    % sign of residual at one end of line is uniformly opposite of other
+    % indication of heteroskedacicity, which can happen when fitting
+    % near-vertical line
+    warning("Possible failed fit to vertical line -- check and if so enable ROT90.")
+    % try total least squares (orthogonal distance regression)
+    beta_1 = tls(X1(:,2), Y1); 
+end
+if all(r2s(1:round(length(r2s)/8)) == -r2s(end-round(length(r2s)/8)+1:end))
+    % repeat for other line
+    warning("Possible failed fit to vertical line -- check and if so enable ROT90.")
+    beta_2 = tls(X2(:,2), Y2); 
+end
+
+% get (x,y) coords of lines at edges of image (will use for plotting)
+xrng1 = [round(min( max(-beta_1(1)/beta_1(2),0),    N)) ...
+         round(max( min((M-beta_1(1))/beta_1(2),N), 0))];
+yrng1 = beta_1(1) + beta_1(2)*xrng1;
+
+xrng2 = [round(min( max(-beta_2(1)/beta_2(2),0), N))
+         round(max( min((M-beta_2(1))/beta_2(2),N), 0))];
+yrng2 = beta_2(1) + beta_2(2)*xrng2;
+
 if PLOTS
-    figure(128); plot(X(:,2),Y,'b.', x_1,y_1,'r'); hold on
+    % plot regression line for x & y values in image
+    figure(128); plot(X1(:,2),Y1,'b.', xrng1,yrng1,'r'); hold on
     title("segment 1 fit line, y = " + round(beta_1(1)) + " + " + round(beta_1(2)) + " x");
     axis([0,N,0,M]);
-end
-%  segment 2
-X = ones(seg_2_len,2);
-X(:,2) = crv_xy(seg_2_idx,1); % data matrix -- predictor
-Y = crv_xy(seg_2_idx,2); % response
-beta_2 = (X'*X)\X'*Y; % linear least squares
-x_2 = 1:N; y_2 = beta_2(1) + beta_2(2)*x_2; % regression line
-x_2_data = X(:,2); 
-y_2_data = Y; 
-if PLOTS
-    figure(128); plot(X(:,2),Y,'b.', x_2,y_2,'r', crv_xy(:,1),crv_xy(:,2)); 
+
+    figure(128); plot(X2(:,2),Y2,'b.', xrng2,yrng2,'r', crv_xy(:,1),crv_xy(:,2)); 
     title({gca().Title.String, "segment 2 fit line, y = " + round(beta_2(1)) + " + " + round(beta_2(2)) + " x"});
     axis([0,N,0,M]); hold off;
 end
@@ -368,36 +405,28 @@ end
 % I'm ignoring whether it should be acute/obtuse 
 % -- that'll have to be done manually after-the-fact
 theta = atan(abs((beta_1(2)-beta_2(2))/(1+beta_1(2)*beta_2(2))))*180/pi;
-%disp(fn{fn_ii} + " --> " + theta + " degrees");
 disp("                   " + theta + " degrees");
 if SAVE, angles_save(fn_ii) = theta; end
 
 % draw on photo
 figure(3); imagesc(im_orig_trim); axis image; axis off;
-hold on; plot(x_1,y_1, LineWidth=2); plot(x_2,y_2, LineWidth=2);
-plot(x_1_data, y_1_data, 'b', LineWidth=4);
-plot(x_2_data, y_2_data, 'r', LineWidth=4);
+hold on; plot(xrng1,yrng1, LineWidth=2); plot(xrng2,yrng2, LineWidth=2);
+plot(X1(:,2), Y1, 'b', LineWidth=4);
+plot(X2(:,2), Y2, 'r', LineWidth=4);
 hold off; axis([0,N,0,M]); title("angle = " + theta + " degrees")
 
 %% save image
 if SAVE
     % start with trimmed image and draw lines on it (no other annotation)
     im_save = im_orig_trim;
-
-    % get indices of line at edge of image
-    idx_line1_1 = find(x_1>0 & x_1<N & y_1>0 & y_1<M,1,'first');
-    idx_line1_2 = find(x_1>0 & x_1<N & y_1>0 & y_1<M,1,'last');
     % plot just the portion of the line in the range of pixels in the image
     im_save = insertShape(im_save, 'Line', ...
-                          [[x_1(idx_line1_1),y_1(idx_line1_1)], ...
-                           [x_1(idx_line1_2),y_1(idx_line1_2)]], ...
+                          [[xrng1(1),yrng1(1)], ...
+                           [xrng1(2),yrng1(2)]], ...
                           'Color', LINE_COLOR, 'LineWidth', 8);
-    % do it again for the other line
-    idx_line2_1 = find(x_2>0 & x_2<N & y_2>0 & y_2<M,1,'first');
-    idx_line2_2 = find(x_2>0 & x_2<N & y_2>0 & y_2<M,1,'last');
     im_save = insertShape(im_save, 'Line', ...
-                          [[x_2(idx_line2_1),y_2(idx_line2_1)], ...
-                           [x_2(idx_line2_2),y_2(idx_line2_2)]], ...
+                          [[xrng2(1),yrng2(1)], ...
+                           [xrng2(2),yrng2(2)]], ...
                           'Color', LINE_COLOR, 'LineWidth', 8);
 
     figure(4); imshow(im_save); 
@@ -412,10 +441,10 @@ end
 
 %% save angles to csv and xlsx
 if SAVE
-    ang_fn = pth + "angles.csv";
-    writecell({pth}, ang_fn)
-    T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
-    writetable(T, ang_fn, 'WriteMode','Append');
+    % ang_fn = pth + "angles.csv";
+    % writecell({pth}, ang_fn)
+    % T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
+    % writetable(T, ang_fn, 'WriteMode','Append');
 
     ang_fn = pth + "angles.xlsx";
     T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
@@ -425,6 +454,19 @@ end
 
 
 %% HELPER FUNCTIONS BELOW THIS LINE
+
+%% Total Least Squares / Orthogonal Distance Regression
+
+function beta = tls(x,y)
+    % fit y = beta(1) + beta(2) x,  where the line is close to vertical
+    % see https://stats.stackexchange.com/a/136597 or wikipedia
+    x = x(:); y = y(:); % insist on column vectors
+    x_bar = mean(x); y_bar = mean(y);
+    v = pca([x-x_bar,y-y_bar]); % PCA on zero-center data
+    beta(2) = v(2,1)/v(1,1); % slope
+    beta(1) = y_bar - beta(2)*x_bar; % restore y-intercept (de-center)
+end
+
 
 %%
 function ret = smooth_th(arg, wid, fil) %#ok<DEFNU>
