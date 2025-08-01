@@ -4,10 +4,11 @@
 %
 % by Thomas Höft 
 
-PINK = true; 
+PINK = false; 
 SAVE = true;
-PLOTS = true;
-MOUNT_DELETE = false; % selectable region to get rid of black mount
+ENDS = true;
+PLOTS = false;
+EXTRA_DELETE = true; % selectable region to get rid of filament tail or mount
 LINE_COLOR = 'w'; % color of line on final image: 
                   % 'k' for black
                   % 'r' for red
@@ -17,15 +18,9 @@ LINE_COLOR = 'w'; % color of line on final image:
                   % 'b' for blue
                   % 'w' for white
 
+%#ok<*UNRCH> % don't warn on unreachable code
 
 %% get filenames
-%#ok<*UNRCH>
-
-%fn = 'IMG_8776.jpeg';
-%[fn_pth,fn_name,~] = fileparts(fn);
-%imfn = [pth filesep fn];
-%im_orig = imread(fn);
-
 
 if exist('pth', 'var') && any(pth~=0)
     [fn,pth] = uigetfile([pth '*.*'],'MultiSelect','on');
@@ -51,7 +46,7 @@ imfn = [pth filesep fn{fn_ii}];
 
 im_orig = imread(imfn);
 
-im_orig = rot90(im_orig,-1);
+%im_orig = rot90(im_orig,-1);
 figure(1); imagesc(im_orig); axis image; colormap gray; colorbar;
 title(fn{fn_ii},'Interpreter','none')
 
@@ -77,12 +72,12 @@ else
 end
     
 figure(1001); imagesc(im_orig); axis image; colormap gray; colorbar;
-title('Select region and press any key');
+title('Select region of interest and press any key');
 roi_rect = images.roi.Rectangle(gca,...
     'Position', rect_pos, 'RotationAngle', rect_rot,...
     'Rotatable', false, 'DrawingArea', 'unlimited');
 addlistener(roi_rect,'ROIMoved',@allevents);
-disp('Select region and press any key');
+%disp('Select region of interest and press any key');
 pause;
 
 trim_info = round(roi_rect.Position);
@@ -95,8 +90,8 @@ im_orig_trim = im_orig(trim_info(2):trim_info(2)+trim_info(4), ...
 figure(2); imagesc(im_trim); axis image; colormap gray; colorbar;
 title('trimmed grayscale image');
 
-if MOUNT_DELETE
-    % also have user select region to get rid of any mounts
+if EXTRA_DELETE
+    % also have user select region to delete
     if exist('mount_rect','var') % check if we've opened the window
         if ishandle(mount_rect) % check if window still open
             mount_pos = mount_rect.Position;
@@ -107,31 +102,30 @@ if MOUNT_DELETE
         mount_rot = 0;
     end
     figure(1002); imagesc(im_trim); axis image; colormap gray; colorbar;
-    title('select mount delete region and press any key');
+    title('select region to delete and press any key');
     mount_rect = images.roi.Rectangle(gca,...
         'Position', mount_pos, 'RotationAngle', mount_rot,...
-        'Rotatable', false, 'DrawingArea', 'auto', ...
-        'Label', 'mount delete');
+        'Rotatable', true, 'DrawingArea', 'auto');
     addlistener(mount_rect,'ROIMoved',@allevents);
-    disp('Select region to delete mount and press any key');
+    %disp('Select region to delete and press any key');
     pause;
-    im_mount = zeros(size(im_trim));
+    im_del = zeros(size(im_trim));
     abcd = round(mount_rect.Position);
-    im_mount(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
+    im_del(abcd(2):abcd(2)+abcd(4)-1, abcd(1):abcd(1)+abcd(3)-1) = 1;
 end
 
 %% --> bw
-if PINK % white on dark
+if PINK % pink on dark
     im_bw = imbinarize(im_trim, 0.8);
     % don't do hole fill-in b/c so much background need to erode first
 else % black on white
     im_bw = imbinarize(1-im_trim, 0.8);
-    % fill in any holes left from specular reflections
-    im_bw = imfill(im_bw,"holes");
+    % fill in any holes left from specular reflections:
+    im_bw = imfill(im_bw,"holes"); % need to do this first for black filament
 end
 
 % delete mount
-if MOUNT_DELETE, im_bw = max(im_bw - im_mount,0); end 
+if EXTRA_DELETE, im_bw = max(im_bw - im_del,0); end 
 
 % get rid of stray little bits
 se = strel("disk",9);
@@ -140,11 +134,13 @@ im_bw = imerode(im_bw,se);
 % fill in any holes left from specular reflections
 im_bw = imfill(im_bw,"holes");
 
-% smooth out boundary 
+% smooth out boundary -- gets rid of wiggles/ripples from textured
+% background (developed b/c of pink filament on lab bench, doesn't hurt
+% black on white)
 ker_d = 51; 
 %ker = ones(ker_d)/ker_d^2; % mean
 ker = exp(-(-(ker_d-1)/2:(ker_d-1)/2).^2); ker = ker/sum(ker); % gaussian
-im_bw = imbinarize(conv2(im_bw,ker,'same')); % blur to smooth
+im_bw = imbinarize(conv2(im_bw,ker,'same')); % blur to smooth, re-binarize
 
 % helps get rid of residual boundary weirdness from background and specular
 % reflections: 
@@ -159,16 +155,16 @@ if PLOTS
     figure(101); imagesc(im_bw+im_skel); axis image; colorbar;
 end
 
-%%
+%% extract centerline/bwskel of filament as parameterized curve
 % get list of (x,y) co-ordinates of each pixel in in (regionprops PixelList)
 s = regionprops(im_skel, 'PixelList'); % same as ind2sub([M,N],find(im_skel))
 %s = regionprops(im_skel, 'PixelIdxList'); % same as find(im_skel(:))
 
 if length(s)~=1 
-    warning("More than one region detected; keeping largest...")
-    reg_len = cellfun('length',{s.PixelList});
-    [~,idx] = sort(reg_len,"descend");
-    s = s(idx(1));
+    warning("More than one segmented region detected; keeping largest...")
+    reg_len = cellfun('length',{s.PixelList}); % get lengths
+    [~,idx] = sort(reg_len,"descend"); % sort so idx(1) points to longest
+    s = s(idx(1)); % keep longest, discard rest
 end
 
 % turn in to a paramaterized curve
@@ -220,61 +216,67 @@ else % got all the points, so just save it
     crv_xy = tmp_crv_1(1:crv_1_end,:);
 end
 
-% trim off first & last 1/16th to avoid any weirdness there
-%n = size(crv_xy,1);
-%crv_xy = crv_xy(round(n/16):end-round(n/16),:);
-
-% double-check that curve is correct;
-if PLOTS
+if PLOTS % double-check that curve is correct;
     tmp_im = zeros(M,N); tmp_im(sub2ind([M,N],crv_xy(:,2),crv_xy(:,1))) = 1;
     figure(110); imagesc(tmp_im); axis image; colormap gray; colorbar;
 end
 
 %% separate into flat & curved: 
-
-%  compute curvature at each point
 x = crv_xy(:,1); y = crv_xy(:,2); 
 crv_len = length(x);
 
-wid = round(crv_len/4); 
-%wid = 51;
-x = smooth(x,wid,'loess');
-dx = gradient(x);
-dx = smooth(dx,wid,'loess');
-ddx = gradient(dx);
-ddx = smooth(ddx,wid,'loess');
-y = smooth(y,wid,'loess');
-dy = gradient(y);
-dy = smooth(dy,wid,'loess');
-ddy = gradient(dy);
-ddy = smooth(ddy,wid,'loess');
+if PLOTS | ~ENDS % either for use in computation or for diagnostic display
+    %  compute curvature at each point
+    wid = round(crv_len/4);
+    %wid = 51;
+    x = smooth(x,wid,'loess');
+    dx = gradient(x);
+    dx = smooth(dx,wid,'loess');
+    ddx = gradient(dx);
+    ddx = smooth(ddx,wid,'loess');
+    y = smooth(y,wid,'loess');
+    dy = gradient(y);
+    dy = smooth(dy,wid,'loess');
+    ddy = gradient(dy);
+    ddy = smooth(ddy,wid,'loess');
 
-
-k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
-k = abs(k);
-k = smooth(k,wid);
-
-% expect a W shape, so find two minima
-% the max inbetween helps find the thresholds we want
-crv_mid = round(crv_len/2);
-[min1,id1] = min(k(10:crv_mid-1)); % ignore first 9 pixels
-id1 = id1 + 10 - 1; % shift 
-[min2,id2] = min(k(crv_mid+1:end-10+1)); % ignore last 9 pixels
-id2 = id2 + crv_mid + 1 - 1; % shift 
-[maxmid,idmaxmid] = max(k(id1:id2));
-idmaxmid = idmaxmid + id1 - 1; % shift 
-kap_thresh1 = (maxmid-min1)/4 + min1;
-kap_thresh2 = (maxmid-min2)/4 + min2;
-kap_zer = false(size(k));
-kap_zer(1:idmaxmid) = k(1:idmaxmid)<kap_thresh1;
-kap_zer(idmaxmid:end) = k(idmaxmid:end)<kap_thresh2;
-if idmaxmid==id1 % curvature is monotone decreasing L->Mid -- straight?
-    kap_zer(1:crv_len/8) = true; % keep left 1/8th?
-end
-if idmaxmid==id2 % curvature is monotone decreasing Mid->R -- straight?
-    kap_zer(end-crv_len/8:end) = true; % keep right 1/8th? 
+    k = (dx.*ddy-dy.*ddx)./(dx.^2+dy.^2).^1.5;
+    k = abs(k);
+    k = smooth(k,wid);
 end
 
+if ~ENDS % find flat regions via curvature
+    % expect a W shape (or just a single bump in middle), so find two minima
+    % the max inbetween helps find the thresholds we want
+    crv_mid = round(crv_len/2);
+    [min1,id1] = min(k(10:crv_mid-1)); % ignore first 9 pixels
+    id1 = id1 + 10 - 1; % shift
+    [min2,id2] = min(k(crv_mid+1:end-10+1)); % ignore last 9 pixels
+    id2 = id2 + crv_mid + 1 - 1; % shift
+    [maxmid,idmaxmid] = max(k(id1:id2));
+    idmaxmid = idmaxmid + id1 - 1; % shift
+    kap_thresh1 = (maxmid-min1)/4 + min1; % 1/4 of height from min to max
+    kap_thresh2 = (maxmid-min2)/4 + min2;
+    kap_zer = false(size(k));
+    kap_zer(1:idmaxmid) = k(1:idmaxmid)<kap_thresh1; % keep low-curvature pts
+    kap_zer(idmaxmid:end) = k(idmaxmid:end)<kap_thresh2;
+    if idmaxmid==id1 % curvature is monotone decreasing L->Mid -- straight?
+        kap_zer(1:round(crv_len/8)) = true; % keep left 1/8th?
+    end
+    if idmaxmid==id2 % curvature is monotone decreasing Mid->R -- straight?
+        kap_zer(end-round(crv_len/8):end) = true; % keep right 1/8th?
+    end
+end
+
+if ENDS % just keep L & R 1/8th
+    kap_zer = false(size(k));
+    % length/6 seems to give enough points for a good fit to the line
+    % leave off first & last length/6 to avoid weirness at ends of curve
+    seg_1_idx = round(crv_len/32):round(crv_len/6);
+    seg_2_idx = (crv_len-round(crv_len/6)):(crv_len-round(crv_len/32));
+    kap_zer(seg_1_idx) = true;
+    kap_zer(seg_2_idx) = true;
+end
 
 if PLOTS
     figure(121); plot(x); title('x'); 
@@ -283,45 +285,53 @@ if PLOTS
     figure(124); plot(y); title('y');
     figure(125); plot(dy); title('dy'); 
     figure(126); plot(ddy); title('ddy');
-    figure(127); plot(1:crv_len,k, ...
-                      [1,idmaxmid],kap_thresh1*ones(1,2), ...
-                      [idmaxmid,crv_len],kap_thresh2*ones(1,2), ...
-                      id1,min1,'ko', id2,min2,'ko', idmaxmid,maxmid,'ko'); 
+    if ENDS
+        figure(127); plot(1:crv_len,k)
     title("|\kappa|");
-    ylim([0,max(k(wid+1:end-wid))*1.1])
+    else
+        figure(127); plot(1:crv_len,k, ...
+                         [1,idmaxmid],kap_thresh1*ones(1,2), ...
+                         [idmaxmid,crv_len],kap_thresh2*ones(1,2), ...
+                          id1,min1,'ko', id2,min2,'ko', idmaxmid,maxmid,'ko');
+        title("|\kappa|");
+        ylim([0,max(k(wid+1:end-wid))*1.1])
+    end
 
     tmp_idx = sub2ind([M,N],crv_xy(kap_zer,2),crv_xy(kap_zer,1));
     tmp_im2 = zeros(M,N); tmp_im2(tmp_idx) = 1;
     figure(130); imagesc(tmp_im2+tmp_im); axis image; colorbar;
 end
 
-%  pull out the two sections from above with small curvatur
-cc = bwconncomp(kap_zer);
-if cc.NumObjects~=2
-    %error("Fewer than two straight segments detected.");
-    %warning("Number of straight segments detected is " + cc.NumObjects + "; should be TWO.");
-    if cc.NumObjects>2
-        %seg_len = cellfun('length',cc.PixelIdxList);
-        %[~,idx] = sort(seg_len,"descend");
-        %cc.PixelIdxList = cc.PixelIdxList(idx);
+% TODO: I THINK THE PART WITH >2 IS IRRELEVANT...?
+if ~ENDS
+    %  pull out the two sections from above with small curvature
+    cc = bwconncomp(kap_zer);
+    if cc.NumObjects~=2
+        %error("Fewer than two straight segments detected.");
+        %warning("Number of straight segments detected is " + cc.NumObjects + "; should be TWO.");
+        if cc.NumObjects>2
+            %seg_len = cellfun('length',cc.PixelIdxList);
+            %[~,idx] = sort(seg_len,"descend");
+            %cc.PixelIdxList = cc.PixelIdxList(idx);
 
-        for ii=1:cc.NumObjects
-            if any(cc.PixelIdxList{ii}==id1) % this one has segment 1
-                seg_1_idx = cc.PixelIdxList{ii}; 
+            for ii=1:cc.NumObjects
+                if any(cc.PixelIdxList{ii}==id1) % this one has segment 1
+                    seg_1_idx = cc.PixelIdxList{ii};
+                end
+                if any(cc.PixelIdxList{ii}==id2) % this one has segment 1
+                    seg_2_idx = cc.PixelIdxList{ii};
+                end
             end
-            if any(cc.PixelIdxList{ii}==id2) % this one has segment 1
-                seg_2_idx = cc.PixelIdxList{ii}; 
-            end
+        else
+            warning("Only one straight line segment detected");
+            % TODO
+            % IF ONLY ONE SEGMENT, CUT IT SOMEWHERE (HALFWAY?) AND FIT TWO LINES?
+            % OR ASSUME ANGLE = 0 ?
         end
     else
-        warning("Only one straight line segment detected");
-        % TODO
-        % IF ONLY ONE SEGMENT, CUT IT SOMEWHERE (HALFWAY?) AND FIT TWO LINES?
-        % OR ASSUME ANGLE = 0 ?
+        seg_1_idx = cc.PixelIdxList{1};
+        seg_2_idx = cc.PixelIdxList{2};
     end
-else
-    seg_1_idx = cc.PixelIdxList{1}; 
-    seg_2_idx = cc.PixelIdxList{2}; 
 end
 seg_1_len = length(seg_1_idx); 
 seg_2_len = length(seg_2_idx);
@@ -354,10 +364,12 @@ if PLOTS
     axis([0,N,0,M]); hold off;
 end
 
-%%
-% compute angle
+%% compute angle
+% I'm ignoring whether it should be acute/obtuse 
+% -- that'll have to be done manually after-the-fact
 theta = atan(abs((beta_1(2)-beta_2(2))/(1+beta_1(2)*beta_2(2))))*180/pi;
-disp(fn{fn_ii} + " --> " + theta + " degrees");
+%disp(fn{fn_ii} + " --> " + theta + " degrees");
+disp("                   " + theta + " degrees");
 if SAVE, angles_save(fn_ii) = theta; end
 
 % draw on photo
@@ -371,20 +383,28 @@ hold off; axis([0,N,0,M]); title("angle = " + theta + " degrees")
 if SAVE
     % start with trimmed image and draw lines on it (no other annotation)
     im_save = im_orig_trim;
+
+    % get indices of line at edge of image
+    idx_line1_1 = find(x_1>0 & x_1<N & y_1>0 & y_1<M,1,'first');
+    idx_line1_2 = find(x_1>0 & x_1<N & y_1>0 & y_1<M,1,'last');
+    % plot just the portion of the line in the range of pixels in the image
     im_save = insertShape(im_save, 'Line', ...
-                          [[x_1(1),y_1(1)], [x_1(end),y_1(end)]], ...
+                          [[x_1(idx_line1_1),y_1(idx_line1_1)], ...
+                           [x_1(idx_line1_2),y_1(idx_line1_2)]], ...
                           'Color', LINE_COLOR, 'LineWidth', 8);
+    % do it again for the other line
+    idx_line2_1 = find(x_2>0 & x_2<N & y_2>0 & y_2<M,1,'first');
+    idx_line2_2 = find(x_2>0 & x_2<N & y_2>0 & y_2<M,1,'last');
     im_save = insertShape(im_save, 'Line', ...
-                          [[x_2(1),y_2(1)], [x_2(end),y_2(end)]], ...
+                          [[x_2(idx_line2_1),y_2(idx_line2_1)], ...
+                           [x_2(idx_line2_2),y_2(idx_line2_2)]], ...
                           'Color', LINE_COLOR, 'LineWidth', 8);
 
-    figure(4); imshow(im_save);
+    figure(4); imshow(im_save); 
 
     [~,fn_tmp,~] = fileparts(fn{fn_ii}); % get filename, strip extension
-    % filename with explicit path, angle rounded to two decimals with
-    % underscore instead of decimal place
-    imwrite(im_save, [pth, filesep, fn_tmp] + "_angle_" + ...
-        floor(theta) + "_" + round((theta-floor(theta))*100) + ".png");
+    % usefilename with explicit path
+    imwrite(im_save, [pth, filesep, fn_tmp] + "_angle" + ".png");
 end
 
 %% end loop over all files
@@ -399,7 +419,7 @@ if SAVE
 
     ang_fn = pth + "angles.xlsx";
     T = table(fn', angles_save, 'VariableNames', {'fileName', 'angle'});
-    writetable(T, ang_fn);
+    writetable(T, ang_fn, 'WriteMode','replacefile');
     writecell({pth}, ang_fn, 'WriteMode','Append')
 end
 
