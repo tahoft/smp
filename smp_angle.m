@@ -3,6 +3,14 @@
 %
 % Thomas Höft, University of St. Thomas
 % hoft@stthomas.edu
+% 
+% last updated: 6 Aug 2025
+
+% NOTEs: 
+% *) requires Image Processing Toolbox; 
+% *) requires Computer Vision Toolbox for saving image with overlay;
+% *) Statistics and Machine Learning Toolbox required for fitting vertical
+% lines -- or just rotate the image 
 
 % If the region selection box disappears, type 
 % >> clear
@@ -28,6 +36,9 @@ PLOTS = false; % show diagnostic plots
 %#ok<*UNRCH> % don't warn on unreachable code
 
 %% get filenames
+
+% ABEER GOT SOME WEIRDNESS WITH "invalid directory to operate on"
+% --> PUT IN A TRY/CATCH HERE?
 
 if exist('pth', 'var') && any(pth~=0)
     [fn,pth] = uigetfile([pth '*.*'],'MultiSelect','on');
@@ -87,6 +98,9 @@ roi_rect = images.roi.Rectangle(gca,...
 addlistener(roi_rect,'ROIMoved',@allevents);
 %disp('Select region of interest and press any key');
 pause;
+
+% WHAT HAPPENS IF RECTANGLE GOES OUTSIDE OF RANGE OF ARRAY? 
+% SHOULD CHECK FOR THAT AND TRIM TO [0 N] and [0 M]
 
 t_v = round(roi_rect.Vertices); % trim vertices 4x2 
                                 % [x1,y1; x2,y2; x3,y3; x4,y4] 
@@ -373,7 +387,7 @@ if all(r1s(1:round(length(r1s)/8)) == -r1s(end-round(length(r1s)/8)+1:end))
     % near-vertical line
     warning("Possible failed fit to vertical line -- check and if so enable ROT90.")
     % try total least squares (orthogonal distance regression)
-    beta_1 = tls(X1(:,2), Y1); 
+    beta_1 = tls(X1(:,2), Y1); % function defined at bottom of this file
 end
 if all(r2s(1:round(length(r2s)/8)) == -r2s(end-round(length(r2s)/8)+1:end))
     % repeat for other line
